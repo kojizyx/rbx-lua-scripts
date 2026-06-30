@@ -158,6 +158,8 @@ local bind_list={
 local HOTKEY_NONE="none"
 local function hotkey_on(key)
     if not key then return false end
+    key=ui_scalar(key)
+    if key==nil then return false end
     local k=tostring(key):lower()
     return k~="" and k~=HOTKEY_NONE
 end
@@ -174,8 +176,14 @@ local hotkey_bind=hotkeys_with(bind_list)
 local hotkey_mac=hotkeys_with({"q","e","r","t","g","h","z","x","c","v","b","n"})
 local hotkey_sl=hotkeys_with({"q","e","r","t","g","h","z","x","c","v","f1","f2","f3","lshift","capslock"})
 local hotkey_menu=hotkeys_with({"rctrl","lctrl","insert","delete","home","end","pageup","pagedown","f1","f2","f3","f4","backquote","tab","capslock"})
+local function ui_scalar(v)
+    while type(v)=="table" do v=v[1] end
+    return v
+end
 local function norm_menu_key(key)
+    key=ui_scalar(key)
     if key==nil then return HOTKEY_NONE end
+    if type(key)~="string" and type(key)~="number" then return HOTKEY_NONE end
     local k=tostring(key):lower():gsub("%s+","")
     if k=="" or k==HOTKEY_NONE then return HOTKEY_NONE end
     local alias={
@@ -1951,6 +1959,11 @@ function cfg_load()
         cfg_changed=false
         chg_t=0
         cfg_migrate()
+        cfg.menu_key=norm_menu_key(cfg.menu_key)
+        local f=ui_scalar(cfg.ui_font)
+        if type(f)=="string" and f~="" then cfg.ui_font=f end
+        local t=ui_scalar(cfg.theme)
+        if type(t)=="string" and t~="" then cfg.theme=t end
         log("[cfg] loaded")
         return true
     end
@@ -4544,12 +4557,15 @@ task.spawn(function()
         subtitle="koji_xyz",
         size=Vector2.new(cfg.ui_w or UI_W_DEFAULT, cfg.ui_h or UI_H_DEFAULT),
         position=Vector2.new(70, 50),
-        menuKey=(hotkey_on(cfg.menu_key) and cfg.menu_key) or "rctrl",
+        menuKey=(function()
+            local mk=norm_menu_key(cfg.menu_key)
+            return (mk~=HOTKEY_NONE and mk) or "rctrl"
+        end)(),
         hotkeyEnabled=(cfg.show_keybinds==true) and cfg.streamer==false,
         autoSave=false,
         startOpen=true,
         gameInput=true,
-        font=cfg.ui_font or UI_FONT_DEFAULT,
+        font=ui_scalar(cfg.ui_font) or UI_FONT_DEFAULT,
         sidebarCollapsed=false,
         collapseSidebar=false,
     })
@@ -4596,11 +4612,11 @@ task.spawn(function()
 
     local apply_ui_font
     local apply_ui_interface
-    local apply_menu_key
+    local bind_menu_hotkey
+    local ui_set_menu_key
 
     local function ui_val_str(v)
-        if type(v)=="table" then return v[1] end
-        return v
+        return ui_scalar(v)
     end
 
     local function get_ui_state()
@@ -4619,7 +4635,7 @@ task.spawn(function()
     end
 
     local function apply_theme(name)
-        local preset=theme_legacy[name] or name or "Grape"
+        local preset=ui_scalar(theme_legacy[name] or name) or "Grape"
         cfg.theme=preset
         pcall(function() UiLib:ApplyThemePreset(preset) end)
         apply_theme_colors(preset)
@@ -4653,15 +4669,13 @@ task.spawn(function()
         end
         local mkv=gv("Settings.Interface.Menu key")
         if mkv~=nil then cfg.menu_key=norm_menu_key(ui_val_str(mkv)) end
-        local rmk=gv("Settings.Redline.Menu key")
-        if rmk~=nil then cfg.menu_key=norm_menu_key(ui_val_str(rmk)) end
         local kov=gv("Settings.Interface.Keybind overlay")
         if kov~=nil then cfg.show_keybinds=kov==true end
         apply_streamer_mode()
         apply_theme_colors(cfg.theme)
         if apply_ui_interface then apply_ui_interface() end
         if apply_ui_font then apply_ui_font(cfg.ui_font) end
-        if apply_menu_key then apply_menu_key(cfg.menu_key) end
+        if bind_menu_hotkey then bind_menu_hotkey() end
         if not silent and (cfg.theme~=ot or cfg.menu_key~=mk or cfg.show_keybinds~=ko or cfg.ui_font~=of) then mark_chg() end
     end
 
@@ -4691,9 +4705,27 @@ task.spawn(function()
     end
 
     local function ui_set_dropdown(path, val)
+        val=ui_scalar(val)
         if val==nil then return end
         ui_set(path, {val})
-        ui_set(path, val)
+    end
+
+    ui_set_menu_key = function(path, key)
+        key=menu_key_pick(norm_menu_key(key))
+        pcall(function()
+            local ok,cur=pcall(function() return UiLib:GetValue(path) end)
+            if ok and norm_menu_key(ui_scalar(cur))==key then return end
+            UiLib:SetValue(path, key)
+        end)
+    end
+
+    bind_menu_hotkey = function()
+        cfg.menu_key=norm_menu_key(cfg.menu_key)
+        if hotkey_on(cfg.menu_key) then
+            pcall(function() win:SetMenuKey(cfg.menu_key) end)
+        else
+            pcall(function() win:SetMenuKey("") end)
+        end
     end
 
     apply_ui_interface = function()
@@ -4716,8 +4748,8 @@ task.spawn(function()
     end
 
     apply_ui_font = function(font)
-        font = font or cfg.ui_font or UI_FONT_DEFAULT
-        cfg.ui_font = font
+        font=ui_scalar(font) or ui_scalar(cfg.ui_font) or UI_FONT_DEFAULT
+        cfg.ui_font=font
         ui_set_dropdown("Settings.Interface.Font", font)
         pcall(function()
             if UiLib.SetFont then UiLib:SetFont(font)
@@ -4731,19 +4763,6 @@ task.spawn(function()
             if type(ps.settings)=="table" and ps.settings.font~=nil then ps.settings.font=font end
         end)
         refresh_draw_font()
-    end
-
-    apply_menu_key = function(key)
-        cfg.menu_key=norm_menu_key(key or cfg.menu_key)
-        local pick=menu_key_pick(cfg.menu_key)
-        ui_set_dropdown("Settings.Interface.Menu key", pick)
-        ui_set_dropdown("Settings.Redline.Menu key", pick)
-        if hotkey_on(cfg.menu_key) then
-            pcall(function() win:SetMenuKey(cfg.menu_key) end)
-            pcall(function() if UiLib.SetMenuKey then UiLib:SetMenuKey(cfg.menu_key) end end)
-        else
-            pcall(function() win:SetMenuKey("") end)
-        end
     end
 
     local gp_tab
@@ -4871,7 +4890,7 @@ task.spawn(function()
         s("Movement.Macros.BDG", cfg.bdg)
         sd("Movement.Macros.BDG key", cfg.bdg_key)
         s("Settings.Redline.Streamer mode", cfg.streamer)
-        sd("Settings.Redline.Menu key", menu_key_pick(cfg.menu_key))
+        ui_set_dropdown("Settings.Redline.Menu key", menu_key_pick(cfg.menu_key))
         s("Settings.Redline.Humanization", cfg.hum)
         s("Settings.Redline.Hum min ms", cfg.hum_min)
         s("Settings.Redline.Hum max ms", cfg.hum_max)
@@ -4911,7 +4930,7 @@ task.spawn(function()
         s("Warn.Incoming Flash.Aim cone angle", cfg.warn_ang)
 
         sd("Settings.Theme.Preset", cfg.theme)
-        sd("Settings.Interface.Menu key", menu_key_pick(cfg.menu_key))
+        ui_set_menu_key("Settings.Interface.Menu key", cfg.menu_key)
         s("Settings.Interface.Keybind overlay", cfg.show_keybinds ~= false)
         s("Settings.Interface.Collapse sidebar", false)
         sd("Settings.Interface.Tab layout", "Sidebar")
@@ -4923,7 +4942,7 @@ task.spawn(function()
         end)
         cfg_syncing=false
         if not ok then return end
-        if apply_menu_key then apply_menu_key(cfg.menu_key) end
+        bind_menu_hotkey()
     end
 
     local function reset_cfg()
@@ -5196,8 +5215,9 @@ task.spawn(function()
         tip(rl:Button("Reset to defaults", function() reset_cfg() end),"reset every setting. reinject to refresh the menu sliders")
         rl:Divider("Options")
         tip(rl:Dropdown("Menu key",{menu_key_pick(cfg.menu_key)},hotkey_menu,false,function(v)
-            cfg.menu_key=norm_menu_key(v[1]); mark_chg()
-            apply_menu_key(cfg.menu_key)
+            cfg.menu_key=norm_menu_key(v); mark_chg()
+            bind_menu_hotkey()
+            ui_set_menu_key("Settings.Interface.Menu key", cfg.menu_key)
         end),"open/close this menu. none disables the hotkey")
         tip(rl:Toggle("Streamer mode", cfg.streamer~=false, function(s) cfg.streamer=s; apply_streamer_mode(); mark_chg() end),"hides toasts and keybind overlay")
         tip(rl:Toggle("Auto save (2s)", cfg.auto_save, function(s) cfg.auto_save=s; mark_chg() end),"saves your settings 2s after any change")
@@ -5239,10 +5259,10 @@ task.spawn(function()
     task.defer(function()
         task.wait(0.12)
         apply_ui_interface()
-        apply_menu_key(cfg.menu_key)
+        bind_menu_hotkey()
         task.wait(0.35)
         apply_ui_interface()
-        apply_menu_key(cfg.menu_key)
+        bind_menu_hotkey()
     end)
 
     task.spawn(function()
@@ -5284,7 +5304,7 @@ task.spawn(function()
                     if norm~=last_menu then
                         last_menu=norm
                         cfg.menu_key=norm
-                        apply_menu_key(norm)
+                        bind_menu_hotkey()
                         mark_chg()
                     end
                 end
@@ -5334,7 +5354,7 @@ task.spawn(function()
     end
 
     uinot("Redline","loaded",3,"success")
-    log("[rl] v35 | INS-ui | fps "..get_fps())
+    log("[rl] v34 | INS-ui | fps "..get_fps())
 end)
 
 end
