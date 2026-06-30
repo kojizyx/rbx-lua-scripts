@@ -174,6 +174,21 @@ local hotkey_bind=hotkeys_with(bind_list)
 local hotkey_mac=hotkeys_with({"q","e","r","t","g","h","z","x","c","v","b","n"})
 local hotkey_sl=hotkeys_with({"q","e","r","t","g","h","z","x","c","v","f1","f2","f3","lshift","capslock"})
 local hotkey_menu=hotkeys_with({"rctrl","lctrl","insert","delete","home","end","pageup","pagedown","f1","f2","f3","f4","backquote","tab","capslock"})
+local function norm_menu_key(key)
+    if key==nil then return HOTKEY_NONE end
+    local k=tostring(key):lower():gsub("%s+","")
+    if k=="" or k==HOTKEY_NONE then return HOTKEY_NONE end
+    local alias={
+        rightctrl="rctrl",leftctrl="lctrl",rightcontrol="rctrl",leftcontrol="lctrl",
+        rightshift="rshift",leftshift="lshift",rightalt="ralt",leftalt="lalt",
+        ctrl="lctrl",control="lctrl",shift="lshift",alt="lalt",
+    }
+    return alias[k] or k
+end
+local function menu_key_pick(key)
+    key=norm_menu_key(key)
+    return (key~=HOTKEY_NONE and key) or HOTKEY_NONE
+end
 local function hum_on() return cfg.hum~=false end
 
 function human_hold_ms()
@@ -4581,6 +4596,12 @@ task.spawn(function()
 
     local apply_ui_font
     local apply_ui_interface
+    local apply_menu_key
+
+    local function ui_val_str(v)
+        if type(v)=="table" then return v[1] end
+        return v
+    end
 
     local function get_ui_state()
         local ps
@@ -4614,6 +4635,7 @@ task.spawn(function()
 
     cfg_ui_sync=function(silent)
         local ot, mk, ko=cfg.theme, cfg.menu_key, cfg.show_keybinds
+        local of=cfg.ui_font
         local function gv(p)
             local ok,v=pcall(function() return UiLib:GetValue(p) end)
             return ok and v or nil
@@ -4624,18 +4646,23 @@ task.spawn(function()
         elseif type(tp)=="string" and tp~="" and tp~="Default" and tp~="Custom" then
             cfg.theme=tp
         end
+        local fv=gv("Settings.Interface.Font")
+        if fv~=nil then
+            local f=ui_val_str(fv)
+            if type(f)=="string" and f~="" then cfg.ui_font=f end
+        end
         local mkv=gv("Settings.Interface.Menu key")
-        if type(mkv)=="string" and mkv~="" and mkv~=HOTKEY_NONE then cfg.menu_key=mkv end
+        if mkv~=nil then cfg.menu_key=norm_menu_key(ui_val_str(mkv)) end
+        local rmk=gv("Settings.Redline.Menu key")
+        if rmk~=nil then cfg.menu_key=norm_menu_key(ui_val_str(rmk)) end
         local kov=gv("Settings.Interface.Keybind overlay")
         if kov~=nil then cfg.show_keybinds=kov==true end
         apply_streamer_mode()
-        local esp=theme_esp[cfg.theme] or theme_esp.Grape
-        if esp then
-            apply_theme_colors(cfg.theme)
-        end
+        apply_theme_colors(cfg.theme)
         if apply_ui_interface then apply_ui_interface() end
         if apply_ui_font then apply_ui_font(cfg.ui_font) end
-        if not silent and (cfg.theme~=ot or cfg.menu_key~=mk or cfg.show_keybinds~=ko) then mark_chg() end
+        if apply_menu_key then apply_menu_key(cfg.menu_key) end
+        if not silent and (cfg.theme~=ot or cfg.menu_key~=mk or cfg.show_keybinds~=ko or cfg.ui_font~=of) then mark_chg() end
     end
 
     local sl_keys=hotkey_sl
@@ -4704,6 +4731,19 @@ task.spawn(function()
             if type(ps.settings)=="table" and ps.settings.font~=nil then ps.settings.font=font end
         end)
         refresh_draw_font()
+    end
+
+    apply_menu_key = function(key)
+        cfg.menu_key=norm_menu_key(key or cfg.menu_key)
+        local pick=menu_key_pick(cfg.menu_key)
+        ui_set_dropdown("Settings.Interface.Menu key", pick)
+        ui_set_dropdown("Settings.Redline.Menu key", pick)
+        if hotkey_on(cfg.menu_key) then
+            pcall(function() win:SetMenuKey(cfg.menu_key) end)
+            pcall(function() if UiLib.SetMenuKey then UiLib:SetMenuKey(cfg.menu_key) end end)
+        else
+            pcall(function() win:SetMenuKey("") end)
+        end
     end
 
     local gp_tab
@@ -4831,7 +4871,7 @@ task.spawn(function()
         s("Movement.Macros.BDG", cfg.bdg)
         sd("Movement.Macros.BDG key", cfg.bdg_key)
         s("Settings.Redline.Streamer mode", cfg.streamer)
-        sd("Settings.Redline.Menu key", hotkey_on(cfg.menu_key) and cfg.menu_key or HOTKEY_NONE)
+        sd("Settings.Redline.Menu key", menu_key_pick(cfg.menu_key))
         s("Settings.Redline.Humanization", cfg.hum)
         s("Settings.Redline.Hum min ms", cfg.hum_min)
         s("Settings.Redline.Hum max ms", cfg.hum_max)
@@ -4871,11 +4911,7 @@ task.spawn(function()
         s("Warn.Incoming Flash.Aim cone angle", cfg.warn_ang)
 
         sd("Settings.Theme.Preset", cfg.theme)
-        pcall(function()
-            if hotkey_on(cfg.menu_key) then win:SetMenuKey(cfg.menu_key)
-            elseif win.SetMenuKey then win:SetMenuKey("") end
-        end)
-        sd("Settings.Interface.Menu key", hotkey_on(cfg.menu_key) and cfg.menu_key or HOTKEY_NONE)
+        sd("Settings.Interface.Menu key", menu_key_pick(cfg.menu_key))
         s("Settings.Interface.Keybind overlay", cfg.show_keybinds ~= false)
         s("Settings.Interface.Collapse sidebar", false)
         sd("Settings.Interface.Tab layout", "Sidebar")
@@ -4887,6 +4923,7 @@ task.spawn(function()
         end)
         cfg_syncing=false
         if not ok then return end
+        if apply_menu_key then apply_menu_key(cfg.menu_key) end
     end
 
     local function reset_cfg()
@@ -5158,12 +5195,9 @@ task.spawn(function()
         end)
         tip(rl:Button("Reset to defaults", function() reset_cfg() end),"reset every setting. reinject to refresh the menu sliders")
         rl:Divider("Options")
-        tip(rl:Dropdown("Menu key",{hotkey_on(cfg.menu_key) and cfg.menu_key or HOTKEY_NONE},hotkey_menu,false,function(v)
-            cfg.menu_key=v[1]; mark_chg()
-            pcall(function()
-                if hotkey_on(cfg.menu_key) then win:SetMenuKey(cfg.menu_key)
-                elseif win.SetMenuKey then win:SetMenuKey("") end
-            end)
+        tip(rl:Dropdown("Menu key",{menu_key_pick(cfg.menu_key)},hotkey_menu,false,function(v)
+            cfg.menu_key=norm_menu_key(v[1]); mark_chg()
+            apply_menu_key(cfg.menu_key)
         end),"open/close this menu. none disables the hotkey")
         tip(rl:Toggle("Streamer mode", cfg.streamer~=false, function(s) cfg.streamer=s; apply_streamer_mode(); mark_chg() end),"hides toasts and keybind overlay")
         tip(rl:Toggle("Auto save (2s)", cfg.auto_save, function(s) cfg.auto_save=s; mark_chg() end),"saves your settings 2s after any change")
@@ -5205,36 +5239,57 @@ task.spawn(function()
     task.defer(function()
         task.wait(0.12)
         apply_ui_interface()
-        apply_ui_font()
+        apply_menu_key(cfg.menu_key)
         task.wait(0.35)
         apply_ui_interface()
-        apply_ui_font()
+        apply_menu_key(cfg.menu_key)
     end)
 
     task.spawn(function()
-        local last_theme = cfg.theme
-        local function ui_val_str(v)
-            if type(v)=="table" then return v[1] end
-            return v
-        end
+        local last_theme=cfg.theme
+        local last_font=cfg.ui_font or UI_FONT_DEFAULT
+        local last_menu=norm_menu_key(cfg.menu_key)
         while loops_active do
             task.wait(0.75)
+            if cfg_syncing then continue end
             pcall(function()
                 if not UiLib then return end
-                local ok, tp = pcall(function() return UiLib:GetValue("Settings.Theme.Preset") end)
+                local ok,tp=pcall(function() return UiLib:GetValue("Settings.Theme.Preset") end)
                 if ok then
-                    local name = ui_val_str(tp)
-                    if type(name) == "string" and name ~= "" and name ~= last_theme then
-                        last_theme = name
-                        apply_ui_interface()
-                        apply_ui_font()
+                    local name=ui_val_str(tp)
+                    if type(name)=="string" and name~="" and name~="Default" and name~="Custom" and name~=last_theme then
+                        last_theme=name
+                        cfg.theme=name
+                        apply_theme_colors(name)
+                        mark_chg()
                     end
                 end
-                local ok2, col = pcall(function() return UiLib:GetValue("Settings.Interface.Collapse sidebar") end)
-                if ok2 and col == true then apply_ui_interface() end
-                local want = cfg.ui_font or UI_FONT_DEFAULT
-                local ok3, fv = pcall(function() return UiLib:GetValue("Settings.Interface.Font") end)
-                if ok3 and ui_val_str(fv) ~= want then apply_ui_font(want) end
+                local okf,fv=pcall(function() return UiLib:GetValue("Settings.Interface.Font") end)
+                if okf then
+                    local ui_font=ui_val_str(fv)
+                    if type(ui_font)=="string" and ui_font~="" and ui_font~=last_font then
+                        last_font=ui_font
+                        cfg.ui_font=ui_font
+                        pcall(function()
+                            if UiLib.SetFont then UiLib:SetFont(ui_font)
+                            elseif win and win.SetFont then win:SetFont(ui_font) end
+                        end)
+                        refresh_draw_font()
+                        mark_chg()
+                    end
+                end
+                local okm,mkv=pcall(function() return UiLib:GetValue("Settings.Interface.Menu key") end)
+                if okm then
+                    local norm=norm_menu_key(ui_val_str(mkv))
+                    if norm~=last_menu then
+                        last_menu=norm
+                        cfg.menu_key=norm
+                        apply_menu_key(norm)
+                        mark_chg()
+                    end
+                end
+                local ok2,col=pcall(function() return UiLib:GetValue("Settings.Interface.Collapse sidebar") end)
+                if ok2 and col==true then apply_ui_interface() end
             end)
         end
     end)
@@ -5279,7 +5334,7 @@ task.spawn(function()
     end
 
     uinot("Redline","loaded",3,"success")
-    log("[rl] v34 | INS-ui | fps "..get_fps())
+    log("[rl] v35 | INS-ui | fps "..get_fps())
 end)
 
 end
